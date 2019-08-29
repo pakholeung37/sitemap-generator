@@ -1,179 +1,93 @@
-const fs = require('fs');
-const http = require('http');
+/**
+ * sitemap生成器，定制化，基于sitemap-generator: https://github.com/lgraubner/sitemap-generator
+ * 添加了爬虫不能识别的动态url，添加了一个可自定义频率和优先级的callback函数
+ *
+ * 使用commander命令行，
+ * 支持-o --output <path> 指定输出目录，默认程序根目录下的./dist/sitemap.xml
+ */
+const SitemapGenerator = require('./sitemap-generator');
 const path = require('path');
-const parseURL = require('url-parse');
-const eachSeries = require('async/eachSeries');
-const cpFile = require('cp-file');
-const normalizeUrl = require('normalize-url');
-const mitt = require('mitt');
-const format = require('date-fns/format');
+const program = require('commander');
+const axios = require('axios');
 
-const createCrawler = require('./createCrawler');
-const SitemapRotator = require('./SitemapRotator');
-const createSitemapIndex = require('./createSitemapIndex');
-const extendFilename = require('./helpers/extendFilename');
-const validChangeFreq = require('./helpers/validChangeFreq');
 
-module.exports = function SitemapGenerator(uri, opts) {
-  const defaultOpts = {
-    stripQuerystring: true,
-    maxEntriesPerFile: 50000,
-    maxDepth: 0,
-    filepath: path.join(process.cwd(), 'sitemap.xml'),
-    userAgent: 'Node/SitemapGenerator',
-    respectRobotsTxt: true,
-    ignoreInvalidSSL: true,
-    timeout: 30000,
-    decodeResponses: true,
-    lastMod: false,
-    changeFreq: '',
-    priorityMap: [],
-    ignoreAMP: true,
-    ignore: null
-  };
+program
+  .version('0.0.1')
+  .option('-o, --output <path>', 'specific output directory', path.resolve(__dirname, '../dist/sitemap.xml'))
+  .parse(process.argv);
 
-  if (!uri) {
-    throw new Error('Requires a valid URL.');
+const targetUrl = 'https://qz.fkw.com';
+
+console.log('target url:', targetUrl);
+console.log('output file:', program.output);
+
+function customPriorityFreq(url) {
+  const map = new Map(
+    [
+      [`^${targetUrl}\/?$`, { priority: '1.0', changeFreq: 'always' }],
+      [`^${targetUrl}\/?blog(?:\.html)?$`, { priority: '0.9', changeFreq: 'hourly' }],
+      [`^${targetUrl}\/?weixin(?:\.html)?$`, { priority: '0.9', changeFreq: 'daily' }],
+      [`^${targetUrl}\/?blog~818.*?(?:\.html)?$`, { priority: '0.8', changeFreq: 'hourly' }],
+      [`^${targetUrl}\/?model(?:\.html)?$`, { priority: '0.8', changeFreq: 'weekly' }],
+      [`^${targetUrl}\/?baidu(?:\.html)?$`, { priority: '0.7', changeFreq: 'daily' }],
+      [`^${targetUrl}\/?blog~((?!818).*?)(?:\.html)?$`, { priority: '0.6', changeFreq: 'weekly' }],
+      [`^${targetUrl}\/?case(?:\.html)?$`, { priority: '0.5', changeFreq: 'monthly' }],
+      [`^${targetUrl}\/?reg(?:\.html)?$`, { priority: '0.2', changeFreq: 'monthly' }],
+      [`^${targetUrl}\/?proFunc(?:\.html)?$`, { priority: '0.3', changeFreq: 'monthly' }],
+      [`^${targetUrl}\/?blog/.*?(?:\.html)?$`, { priority: '0.4', changeFreq: 'weekly' }],
+      [`^${targetUrl}\/?model-.*?(?:\.html)?$`, { priority: '0.2', changeFreq: 'monthly' }],
+      [`^${targetUrl}\/?case-.*?(?:\.html)?$`, { priority: '0.1', changeFreq: 'monthly' }]
+    ]
+  )
+
+  for (let [key, value] of map) {
+    if(new RegExp(key).test(url)) {
+      return value
+    };
   }
+  return {};
+}
 
-  const options = Object.assign({}, defaultOpts, opts);
+const generator = SitemapGenerator(targetUrl, {
+  stripQuerystring: false,
+  filepath: program.output,
+  changeFreq: 'monthly',
+  priorityMap: [1.0, 0.8, 0.6, 0.4, 0.2, 0],
+  lastMod: true,
+  customPriorityFreq,
+});
 
-  // if changeFreq option was passed, check to see if the value is valid
-  if (opts && opts.changeFreq) {
-    options.changeFreq = validChangeFreq(opts.changeFreq);
-  }
 
-  const emitter = mitt();
+const crawler = generator.getCrawler();
+const sitemap = generator.getSitemap()
 
-  const parsedUrl = parseURL(
-    normalizeUrl(uri, {
-      stripWWW: false,
-      removeTrailingSlash: false
-    })
-  );
-
-  // only resolve if sitemap path is truthy (a string preferably)
-  const sitemapPath = options.filepath && path.resolve(options.filepath);
-
-  // we don't care about invalid certs
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
-  const crawler = createCrawler(parsedUrl, options);
-
-  // create sitemap stream
-  const sitemap = SitemapRotator(
-    options.maxEntriesPerFile,
-    options.lastMod,
-    options.changeFreq,
-    options.priorityMap
-  );
-
-  const emitError = (code, url) => {
-    emitter.emit('error', {
-      code,
-      message: http.STATUS_CODES[code],
-      url
+// 添加model动态url
+crawler.on('crawlstart', () => {
+  axios.get('https://qz.fkw.com/ajax/model_h.jsp?cmd=getPageData')
+  .then((response) => {
+    const data = response.data;
+    const tradeList = data.kindData.tradeList;
+    // 构造Url
+    const lastMod = response.headers['last-modified'];
+    // sitemap.addURL(url, depth, lastMod && format(lastMod, 'YYYY-MM-DD'));
+    const urls = tradeList.map(item => `https://qz.fkw.com/model-0-${item.id}.html`);
+    urls.forEach(url => {
+      // emitter.emit('add', url);
+      // sitemap.addURL(url, 3, lastMod && format(lastMod, 'YYYY-MM-DD'))
+      crawler.queueURL(url);
     });
-  };
+  })
+})
 
-  crawler.on('fetch404', ({ url }) => emitError(404, url));
-  crawler.on('fetchtimeout', ({ url }) => emitError(408, url));
-  crawler.on('fetch410', ({ url }) => emitError(410, url));
-  crawler.on('fetcherror', (queueItem, response) =>
-    emitError(response.statusCode, queueItem.url)
-  );
+generator.on('add', function(url) {
+  console.log('add: ', url);
+})
+generator.on('ignore', (url) => {
+  console.log('ignore: ', url);
+});
+generator.on('done', function() {
+  console.log('done');
+})
 
-  crawler.on('fetchclienterror', (queueError, errorData) => {
-    if (errorData.code === 'ENOTFOUND') {
-      throw new Error(`Site "${parsedUrl.href}" could not be found.`);
-    } else {
-      emitError(400, errorData.message);
-    }
-  });
 
-  crawler.on('fetchdisallowed', ({ url }) => emitter.emit('ignore', url));
-
-  // fetch complete event
-  crawler.on('fetchcomplete', (queueItem, page) => {
-    const { url, depth } = queueItem;
-
-    if (
-      (opts.ignore && opts.ignore(url)) ||
-      /(<meta(?=[^>]+noindex).*?>)/.test(page) || // check if robots noindex is present
-      (options.ignoreAMP && /<html[^>]+(amp|⚡)[^>]*>/.test(page)) // check if it's an amp page
-    ) {
-      emitter.emit('ignore', url);
-    } else {
-      emitter.emit('add', url);
-
-      if (sitemapPath !== null) {
-        // eslint-disable-next-line
-        const lastMod = queueItem.stateData.headers['last-modified'];
-        sitemap.addURL(url, depth, lastMod && format(lastMod, 'YYYY-MM-DD'));
-      }
-    }
-  });
-
-  crawler.on('complete', () => {
-    sitemap.finish();
-
-    const sitemaps = sitemap.getPaths();
-
-    const cb = () => emitter.emit('done');
-
-    if (sitemapPath !== null) {
-      // move files
-      if (sitemaps.length > 1) {
-        // multiple sitemaps
-        let count = 1;
-        eachSeries(
-          sitemaps,
-          (tmpPath, done) => {
-            const newPath = extendFilename(sitemapPath, `_part${count}`);
-
-            // copy and remove tmp file
-            cpFile(tmpPath, newPath).then(() => {
-              fs.unlink(tmpPath, () => {
-                done();
-              });
-            });
-
-            count += 1;
-          },
-          () => {
-            const filename = path.basename(sitemapPath);
-            fs.writeFile(
-              sitemapPath,
-              createSitemapIndex(
-                parsedUrl.toString(),
-                filename,
-                sitemaps.length
-              ),
-              cb
-            );
-          }
-        );
-      } else if (sitemaps.length) {
-        cpFile(sitemaps[0], sitemapPath).then(() => {
-          fs.unlink(sitemaps[0], cb);
-        });
-      } else {
-        cb();
-      }
-    } else {
-      cb();
-    }
-  });
-
-  return {
-    start: () => crawler.start(),
-    stop: () => crawler.stop(),
-    getCrawler: () => crawler,
-    getSitemap: () => sitemap,
-    queueURL: url => {
-      crawler.queueURL(url, undefined, false);
-    },
-    on: emitter.on,
-    off: emitter.off
-  };
-};
+generator.start();

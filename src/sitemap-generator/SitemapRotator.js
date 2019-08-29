@@ -5,7 +5,7 @@ module.exports = function SitemapRotator(
   maxEntries,
   lastModEnabled,
   changeFreq,
-  priorityMap
+  priorityMap,
 ) {
   const sitemaps = [];
   let count = 0;
@@ -19,7 +19,7 @@ module.exports = function SitemapRotator(
     }, []);
 
   // adds url to stream
-  const addURL = (url, depth, lastMod = getCurrentDateTime()) => {
+  const addURL = (url, depth, lastMod = getCurrentDateTime(), customPriorityFreq = null) => {
     const currentDateTime = lastModEnabled ? lastMod : null;
 
     // exclude existing sitemap.xml
@@ -49,6 +49,13 @@ module.exports = function SitemapRotator(
       priority = priorityMap[depth - 1]
         ? priorityMap[depth - 1]
         : priorityMap[priorityMap.length - 1];
+    }
+
+    // if customPriorityFreq function not equal null, set priority and freq to custom
+    if (customPriorityFreq) {
+      const result = customPriorityFreq(url);
+      if (result.changeFreq) changeFreq = result.changeFreq;
+      if (result.priority) priority = result.priority;
     }
 
     current.write(url, currentDateTime, changeFreq, priority);
