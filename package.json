@@ -1,6 +1,6 @@
 {
   "name": "sitemap-generator",
-  "version": "0.0.0-semantically-released",
+  "version": "0.0.1",
   "main": "src/index.js",
   "dependencies": {
     "async": "2.6.1",

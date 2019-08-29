@@ -1,9 +1,15 @@
 /**
+ * @author 梁伯豪 PakhoLeung
+ * @version 0.0.1
+ * @license MIT
+ *
+ * @description
  * sitemap生成器，定制化，基于sitemap-generator: https://github.com/lgraubner/sitemap-generator
  * 添加了爬虫不能识别的动态url，添加了一个可自定义频率和优先级的callback函数
  *
  * 使用commander命令行，
- * 支持-o --output <path> 指定输出目录，默认程序根目录下的./dist/sitemap.xml
+ * -o --output <path> 指定输出目录，默认程序根目录下的./dist/sitemap.xml
+ * -s --silent 静默运行
  */
 const SitemapGenerator = require('./sitemap-generator');
 const path = require('path');
@@ -14,12 +20,20 @@ const axios = require('axios');
 program
   .version('0.0.1')
   .option('-o, --output <path>', 'specific output directory', path.resolve(__dirname, '../dist/sitemap.xml'))
+  .option('-s, --silent', 'silent log')
   .parse(process.argv);
 
-const targetUrl = 'https://qz.fkw.com';
 
-console.log('target url:', targetUrl);
-console.log('output file:', program.output);
+function log(...args) {
+  if(!program.silent) console.log(...args);
+}
+
+  const targetUrl = 'https://qz.fkw.com';
+
+
+
+log('target url:', targetUrl);
+log('output file:', program.output);
 
 function customPriorityFreq(url) {
   const map = new Map(
@@ -80,13 +94,13 @@ crawler.on('crawlstart', () => {
 })
 
 generator.on('add', function(url) {
-  console.log('add: ', url);
+  log('add: ', url);
 })
 generator.on('ignore', (url) => {
-  console.log('ignore: ', url);
+  log('ignore: ', url);
 });
 generator.on('done', function() {
-  console.log('done');
+  log('done');
 })
 
 
